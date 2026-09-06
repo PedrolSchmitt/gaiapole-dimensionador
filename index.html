@@ -738,8 +738,10 @@ function px(m) { return m * SC; }
 function mt(p) { return p / SC; }
 
 function applyRoom() {
-  roomW = parseFloat(document.getElementById('roomW').value) || 6;
-  roomH = parseFloat(document.getElementById('roomH').value) || 8;
+  const w = parseFloat(document.getElementById('roomW').value);
+  const h = parseFloat(document.getElementById('roomH').value);
+  roomW = w > 0 ? w : 6;
+  roomH = h > 0 ? h : 8;
   layoutActive = true;
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('canvas-wrap').style.display = 'inline-block';
@@ -846,7 +848,7 @@ function computeScale() {
   const area = document.getElementById('canvasArea');
   const maxW = area.clientWidth - 60;
   const maxH = area.clientHeight - 60;
-  SC = Math.max(20, Math.min(maxW / roomW, maxH / roomH, 160));
+  SC = Math.max(1, Math.min(maxW / roomW, maxH / roomH, 160));
   canvas.width = Math.round(roomW * SC);
   canvas.height = Math.round(roomH * SC);
   document.getElementById('canvasLabel').textContent =
@@ -1232,8 +1234,8 @@ function triggerDownload() {
 }
 
 function sendWhatsApp() {
+  window.open('https://wa.me/554738422988?text=' + encodeURIComponent(buildMsg()), '_blank');
   triggerDownload();
-  setTimeout(function() { window.open('https://wa.me/554738422988?text=' + encodeURIComponent(buildMsg()), '_blank'); }, 500);
 }
 
 function sendEmail() {
@@ -1286,9 +1288,12 @@ async function gateSubmit() {
   spinner.style.display = 'block';
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     await fetch('https://n8n.srv1629578.hstgr.cloud/webhook/39c06696-501a-40bf-aacb-072ae1c70852', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         nome: name,
         email: email,
@@ -1297,8 +1302,9 @@ async function gateSubmit() {
         data: new Date().toLocaleString('pt-BR')
       })
     });
+    clearTimeout(timeoutId);
   } catch(e) {
-    // Fail silently — don't block the user if webhook is down
+    // Fail silently (including timeout/abort) — don't block the user if webhook is down or slow
     console.warn('Webhook error:', e);
   }
 
