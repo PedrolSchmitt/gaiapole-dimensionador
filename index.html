@@ -814,7 +814,6 @@ function applyRoom() {
   roomH = h > 0 ? h : 8;
   layoutActive = true;
   document.getElementById('emptyState').style.display = 'none';
-  document.getElementById('canvas-wrap').style.display = 'inline-block';
   document.getElementById('zoomControls').classList.add('show');
   document.getElementById('viewToggle').classList.add('show');
   resetZoom();
@@ -1073,16 +1072,28 @@ function render() {
 
   updateStats();
   if (window.SpaceView3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
+  applyViewVisibility();
 }
 
 let view3DInitialized = false;
-function setViewMode(mode) {
-  const is3D = mode === '3d';
-  document.getElementById('btn2D').classList.toggle('active', !is3D);
-  document.getElementById('btn3D').classList.toggle('active', is3D);
+let currentViewMode = '2d';
+
+// Single source of truth for which wrap is shown — called after every
+// render() so re-applying the room (or any future call site) can't leave
+// both the 2D and 3D canvases visible at once.
+function applyViewVisibility() {
+  const is3D = currentViewMode === '3d';
   document.getElementById('canvas-wrap').style.display = is3D ? 'none' : (layoutActive ? 'inline-block' : 'none');
   document.getElementById('zoomControls').style.display = is3D ? 'none' : '';
   document.getElementById('canvas3d-wrap').style.display = is3D ? 'block' : 'none';
+}
+
+function setViewMode(mode) {
+  currentViewMode = mode;
+  const is3D = mode === '3d';
+  document.getElementById('btn2D').classList.toggle('active', !is3D);
+  document.getElementById('btn3D').classList.toggle('active', is3D);
+  applyViewVisibility();
 
   if (!window.SpaceView3D) return;
   if (is3D && !view3DInitialized) {
