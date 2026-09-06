@@ -540,7 +540,65 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* VIEW TOGGLE (2D/3D) */
+  .view-toggle {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    display: none;
+    gap: 2px;
+    z-index: 5;
+    background: rgba(255,255,255,0.95);
+    border-radius: 10px;
+    padding: 4px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(6px);
+  }
+  .view-toggle.show { display: flex; }
+  .view-toggle-btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 7px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .view-toggle-btn:hover { background: var(--teal-pale); color: var(--teal-dark); }
+  .view-toggle-btn.active { background: var(--teal); color: #fff; }
+
+  #canvas3d-wrap { display: none; width: 100%; height: 100%; position: relative; }
+  #canvas3dContainer {
+    width: 100%; height: 100%; position: relative;
+    border-radius: 4px; overflow: hidden;
+    box-shadow: var(--shadow-md); background: #f5f5f5;
+  }
+  .pole-label-3d {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: #00a895;
+    background: rgba(255,255,255,0.9);
+    padding: 2px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    pointer-events: none;
+  }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
 </head>
 <body>
 
@@ -680,6 +738,13 @@
       <canvas id="mainCanvas"></canvas>
       <div class="canvas-lbl" id="canvasLabel"></div>
     </div>
+    <div id="canvas3d-wrap">
+      <div id="canvas3dContainer"></div>
+    </div>
+    <div class="view-toggle" id="viewToggle">
+      <button class="view-toggle-btn active" id="btn2D" onclick="setViewMode('2d')" aria-label="Vista 2D">2D</button>
+      <button class="view-toggle-btn" id="btn3D" onclick="setViewMode('3d')" aria-label="Vista 3D">3D</button>
+    </div>
     <div class="zoom-controls" id="zoomControls">
       <button class="zoom-btn" id="zoomInBtn" onclick="zoomBy(1.2)" aria-label="Aproximar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
@@ -746,6 +811,7 @@ function applyRoom() {
   document.getElementById('emptyState').style.display = 'none';
   document.getElementById('canvas-wrap').style.display = 'inline-block';
   document.getElementById('zoomControls').classList.add('show');
+  document.getElementById('viewToggle').classList.add('show');
   resetZoom();
   fullRebuild(true);
   // Mobile: auto-collapse the drawer once the user has applied the room
@@ -1001,6 +1067,25 @@ function render() {
   });
 
   updateStats();
+  if (window.SpaceView3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
+}
+
+let view3DInitialized = false;
+function setViewMode(mode) {
+  const is3D = mode === '3d';
+  document.getElementById('btn2D').classList.toggle('active', !is3D);
+  document.getElementById('btn3D').classList.toggle('active', is3D);
+  document.getElementById('canvas-wrap').style.display = is3D ? 'none' : (layoutActive ? 'inline-block' : 'none');
+  document.getElementById('zoomControls').style.display = is3D ? 'none' : '';
+  document.getElementById('canvas3d-wrap').style.display = is3D ? 'block' : 'none';
+
+  if (!window.SpaceView3D) return;
+  if (is3D && !view3DInitialized) {
+    window.SpaceView3D.init(document.getElementById('canvas3dContainer'));
+    view3DInitialized = true;
+  }
+  if (is3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
+  window.SpaceView3D.setActive(is3D);
 }
 
 // Drag
@@ -1323,6 +1408,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 </script>
+<script type="module" src="space-view-3d.js"></script>
 
 <!-- GATE MODAL -->
 <div class="gate-overlay" id="gateOverlay">
