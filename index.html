@@ -657,10 +657,10 @@
           <span>Raio de segurança</span>
           <span class="slider-val" id="spacingVal">1.20 m</span>
         </div>
-        <input type="range" id="spacingSlider" min="0.7" max="4" step="0.05" value="1.2" oninput="onSpacingChange(this.value)">
-        <div class="slider-hints"><span>0.7 m</span><span>4 m</span></div>
+        <input type="range" id="spacingSlider" min="1.2" max="4" step="0.05" value="1.2" oninput="onSpacingChange(this.value)">
+        <div class="slider-hints"><span>1.2 m</span><span>4 m</span></div>
       </div>
-      <div class="tip">O raio define o espaço de cada aluno ao redor do pole. Diminua para encaixar mais poles, aumente para mais conforto.</div>
+      <div class="tip">O raio define o espaço de cada aluno ao redor do pole. O mínimo seguro é 1,20 m; aumente para mais conforto.</div>
     </div>
 
     <div class="sec">
@@ -812,6 +812,259 @@ let SC = 80;
 function px(m) { return m * SC; }
 function mt(p) { return p / SC; }
 
+// Light-oak plank floor drawn once on a canvas and shared by the 2D plan and
+// the 3D view, so both show the same floor. One tile = WOOD_TILE_M metres
+// (8 planks × 15cm); each row wraps horizontally so the tile has no seams.
+const WOOD_TILE_M = 1.2;
+let woodCanvas = null;
+function getWoodCanvas() {
+  if (woodCanvas) return woodCanvas;
+  const size = 1024, rows = 8, rowH = size / rows;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const tones = ['#c39467', '#b9895c', '#cc9f72', '#b38257', '#c89a6b', '#bf9064'];
+
+  function plank(x, y, len, tone) {
+    g.fillStyle = tone;
+    g.fillRect(x, y, len, rowH);
+    g.lineWidth = 1;
+    for (let i = 0; i < 7; i++) {
+      const gy = y + 4 + Math.random() * (rowH - 8);
+      g.strokeStyle = 'rgba(110, 70, 35, ' + (0.05 + Math.random() * 0.08) + ')';
+      g.beginPath();
+      g.moveTo(x, gy);
+      g.bezierCurveTo(x + len * 0.33, gy + (Math.random() - 0.5) * 8,
+                      x + len * 0.66, gy + (Math.random() - 0.5) * 8,
+                      x + len, gy + (Math.random() - 0.5) * 4);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(90, 58, 28, 0.35)';
+    g.fillRect(x, y, 2, rowH);
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const y = r * rowH;
+    const start = Math.random() * size;
+    let pos = 0;
+    while (pos < size) {
+      let len = size * (0.5 + Math.random() * 0.45);
+      if (size - pos - len < size * 0.15) len = size - pos;
+      const tone = tones[Math.floor(Math.random() * tones.length)];
+      plank(start + pos, y, len, tone);
+      plank(start + pos - size, y, len, tone);
+      pos += len;
+    }
+    g.fillStyle = 'rgba(90, 58, 28, 0.3)';
+    g.fillRect(0, y, size, 2);
+  }
+  woodCanvas = c;
+  return c;
+}
+window.getWoodCanvas = getWoodCanvas;
+window.WOOD_TILE_M = WOOD_TILE_M;
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Top-down figure at real scale: one hand on the pole, arms fully open, so the
+// user can compare an adult's reach with the safety zone. Each pole keeps its
+// own figAngle (canvas radians); users rotate it by dragging the free hand.
+const ARM_SPAN_M = 1.65;
+const FIGURE_ANGLE = -Math.PI * 0.75; // default: up-left, clear of the label under each pole
+const FIG = { skin: '#eec19f', skinLine: '#c4916c', top: '#00C9B1', topLight: '#3fe0cb', topDark: '#00897a', shorts: '#151515', hair: '#3a2a20', hairLight: '#5a4334' };
+window.ARM_SPAN_M = ARM_SPAN_M;
+window.FIGURE_COLORS = FIG;
+
+function figureAngle(pole) { return pole.figAngle == null ? FIGURE_ANGLE : pole.figAngle; }
+
+// Rotate handle sits on the figure's free hand
+function handlePos(pole) {
+  const d = px(ARM_SPAN_M) - px(0.05), a = figureAngle(pole);
+  return { x: px(pole.x) + Math.cos(a) * d, y: px(pole.y) + Math.sin(a) * d };
+}
+function handleRadius() { return Math.max(9, px(0.09)); }
+
+function hitHandle(x, y) {
+  const r = Math.max(14, handleRadius() * 1.4); // generous for fingers
+  for (let i = poles.length - 1; i >= 0; i--) {
+    const h = handlePos(poles[i]);
+    if (Math.hypot(h.x - x, h.y - y) < r) return i;
+  }
+  return -1;
+}
+
+function drawHandle(pole, active) {
+  const h = handlePos(pole), r = handleRadius();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(h.x, h.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = active ? '#00C9B1' : 'rgba(255,255,255,0.9)';
+  ctx.fill();
+  ctx.strokeStyle = '#00a895';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // ↻ icon
+  const ir = r * 0.5, col = active ? '#fff' : '#00a895';
+  ctx.beginPath();
+  ctx.arc(h.x, h.y, ir, -Math.PI * 0.35, Math.PI * 1.25);
+  ctx.strokeStyle = col;
+  ctx.lineWidth = Math.max(1.5, r * 0.16);
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  const ax = h.x + Math.cos(-Math.PI * 0.35) * ir, ay = h.y + Math.sin(-Math.PI * 0.35) * ir;
+  const s = r * 0.32;
+  ctx.beginPath();
+  ctx.moveTo(ax - s, ay - s * 0.6);
+  ctx.lineTo(ax, ay);
+  ctx.lineTo(ax - s * 0.15, ay - s * 1.15);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFigure(cx, cy, poleR, angle) {
+  const half = px(ARM_SPAN_M) / 2;
+  const handL = px(0.1), handW = px(0.05);
+  // Hand centres: the pole-side hand wraps the tube, the other is at full reach
+  const hxL = -half + poleR + handL * 0.4, hxR = half - handL / 2;
+  const shoulder = px(0.17), elbowL = (hxL - shoulder) / 2, elbowR = (hxR + shoulder) / 2;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.translate(half, 0); // body centre; local +x points away from the pole, -y is where she faces
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Soft floor shadow under the whole figure
+  ctx.save();
+  ctx.filter = 'blur(' + Math.max(2, px(0.05)) + 'px)';
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.beginPath();
+  ctx.ellipse(px(0.03), px(0.04), px(0.24), px(0.15), 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = px(0.08);
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.beginPath();
+  ctx.moveTo(hxL + px(0.03), px(0.04));
+  ctx.lineTo(hxR + px(0.03), px(0.04));
+  ctx.stroke();
+  ctx.restore();
+
+  // Feet, toes peeking out in front of the body
+  [-1, 1].forEach(function(s) {
+    ctx.save();
+    ctx.translate(s * px(0.085), -px(0.1));
+    ctx.rotate(s * 0.18);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, px(0.04), px(0.11), 0, 0, Math.PI * 2);
+    ctx.fillStyle = FIG.skin;
+    ctx.fill();
+    ctx.strokeStyle = FIG.skinLine;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // Arms: upper arm + forearm tapering to the wrist (outlines first, then fills)
+  const segs = [
+    [-shoulder, elbowL, px(0.1)], [elbowL, hxL + handL * 0.4, px(0.07)],
+    [shoulder, elbowR, px(0.1)], [elbowR, hxR - handL * 0.4, px(0.07)],
+  ];
+  [[FIG.skinLine, 1.5], [FIG.skin, 0]].forEach(function(pass) {
+    ctx.strokeStyle = pass[0];
+    segs.forEach(function(sg) {
+      ctx.lineWidth = Math.max(2, sg[2]) + pass[1];
+      ctx.beginPath();
+      ctx.moveTo(sg[0], 0);
+      ctx.lineTo(sg[1], 0);
+      ctx.stroke();
+    });
+  });
+
+  // Hands, fingers pointing outward
+  [[hxL, -1], [hxR, 1]].forEach(function(h) {
+    ctx.beginPath();
+    ctx.ellipse(h[0], 0, handL / 2, handW / 2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = FIG.skin;
+    ctx.fill();
+    ctx.strokeStyle = FIG.skinLine;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  // Black shorts just peeking out behind the shoulders
+  ctx.beginPath();
+  ctx.ellipse(0, px(0.03), px(0.17), px(0.11), 0, 0, Math.PI * 2);
+  ctx.fillStyle = FIG.shorts;
+  ctx.fill();
+
+  // Torso: rounded shoulders, brand-colour shirt with seams
+  const tw = px(0.215), td = px(0.115);
+  ctx.beginPath();
+  ctx.moveTo(-tw, 0);
+  ctx.bezierCurveTo(-tw, -td * 1.1, tw, -td * 1.1, tw, 0);
+  ctx.bezierCurveTo(tw, td * 1.05, -tw, td * 1.05, -tw, 0);
+  const tg = ctx.createLinearGradient(0, -td, 0, td);
+  tg.addColorStop(0, FIG.topLight);
+  tg.addColorStop(1, FIG.topDark);
+  ctx.fillStyle = tg;
+  ctx.fill();
+  ctx.strokeStyle = FIG.topDark;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = Math.max(1, px(0.015));
+  [-1, 1].forEach(function(s) {
+    ctx.beginPath();
+    ctx.moveTo(s * px(0.1), -td * 0.8);
+    ctx.lineTo(s * px(0.1), td * 0.8);
+    ctx.stroke();
+  });
+
+  // Head: face edge in front, hair over the top, bun at the back
+  ctx.beginPath();
+  ctx.ellipse(0, -px(0.015), px(0.082), px(0.098), 0, 0, Math.PI * 2);
+  ctx.fillStyle = FIG.skin;
+  ctx.fill();
+  const hg = ctx.createRadialGradient(-px(0.03), -px(0.01), 0, 0, px(0.01), px(0.095));
+  hg.addColorStop(0, FIG.hairLight);
+  hg.addColorStop(1, FIG.hair);
+  ctx.beginPath();
+  ctx.ellipse(0, px(0.008), px(0.086), px(0.088), 0, 0, Math.PI * 2);
+  ctx.fillStyle = hg;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, -px(0.075));
+  ctx.lineTo(0, px(0.05));
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, px(0.1), px(0.042), 0, Math.PI * 2);
+  ctx.fillStyle = FIG.hair;
+  ctx.fill();
+  ctx.restore();
+}
+
+// Small white pill behind text so labels stay readable on the wood floor.
+function pillText(text, x, y, color) {
+  const w = ctx.measureText(text).width + 12;
+  const h = parseFloat(ctx.font.match(/(\d+(\.\d+)?)px/)[1]) + 7;
+  roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y + 0.5);
+}
+
 function applyRoom() {
   const w = parseFloat(document.getElementById('roomW').value);
   const h = parseFloat(document.getElementById('roomH').value);
@@ -868,8 +1121,10 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+const MIN_SPACING = 1.2; // minimum safety radius per pole
+
 function onSpacingChange(v) {
-  spacing = parseFloat(v);
+  spacing = Math.max(MIN_SPACING, parseFloat(v));
   document.getElementById('spacingVal').textContent = spacing.toFixed(2) + ' m';
   if (layoutActive) fullRebuild(false);
 }
@@ -905,7 +1160,8 @@ function updateCountUI() {
 
 function applyPoleCount() {
   const selected = selectSpread(allSlots, poleCount);
-  poles = selected.map((s, i) => ({ x: s.x, y: s.y, label: 'Pole ' + (i + 1) }));
+  // Keep each figure's rotation when the pole count changes
+  poles = selected.map((s, i) => ({ x: s.x, y: s.y, label: 'Pole ' + (i + 1), figAngle: poles[i] ? poles[i].figAngle : undefined }));
   updateStats();
   render();
 }
@@ -1001,36 +1257,54 @@ function updateStats() {
   }
 }
 
-function render() {
+function render(opts) {
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#ffffff';
+
+  // Wood floor (same texture as the 3D view)
+  const wood = ctx.createPattern(getWoodCanvas(), 'repeat');
+  const woodScale = px(WOOD_TILE_M) / getWoodCanvas().width;
+  wood.setTransform(new DOMMatrix().scale(woodScale));
+  ctx.fillStyle = wood;
+  ctx.fillRect(0, 0, W, H);
+  // Lighten it to match how the lit 3D floor reads, and keep the teal zones clean on top
+  ctx.fillStyle = 'rgba(255,251,246,0.5)';
   ctx.fillRect(0, 0, W, H);
 
   // Grid
   const gs = px(1);
-  ctx.strokeStyle = 'rgba(0,201,177,0.08)';
+  ctx.strokeStyle = 'rgba(70,45,20,0.18)';
   ctx.lineWidth = 1;
-  for (let x = 0; x <= W; x += gs) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y = 0; y <= H; y += gs) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  for (let x = gs; x < W; x += gs) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = gs; y < H; y += gs) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
 
-  // Room border
+  // Walls: light band with a skirting line and a teal inner edge
+  const wallPx = Math.max(5, Math.min(px(0.1), 10));
+  ctx.fillStyle = '#efeae3';
+  ctx.fillRect(0, 0, W, wallPx);
+  ctx.fillRect(0, H - wallPx, W, wallPx);
+  ctx.fillRect(0, 0, wallPx, H);
+  ctx.fillRect(W - wallPx, 0, wallPx, H);
+  ctx.strokeStyle = '#6b6560';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(0.75, 0.75, W - 1.5, H - 1.5);
   ctx.strokeStyle = '#00C9B1';
-  ctx.lineWidth = 2.5;
-  ctx.strokeRect(1, 1, W-2, H-2);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(wallPx, wallPx, W - wallPx * 2, H - wallPx * 2);
 
   // Rulers
   const fs = Math.max(9, Math.min(11, SC * 0.1));
-  ctx.font = '500 ' + fs + 'px Montserrat, sans-serif';
-  ctx.fillStyle = 'rgba(0,168,149,0.55)';
+  ctx.font = '600 ' + fs + 'px Montserrat, sans-serif';
   ctx.textAlign = 'center';
-  for (let i = 1; i < roomW; i++) ctx.fillText(i+'m', px(i), fs + 3);
-  ctx.textAlign = 'left';
-  for (let i = 1; i < roomH; i++) ctx.fillText(i+'m', 4, px(i) + 3);
+  ctx.textBaseline = 'middle';
+  for (let i = 1; i < roomW; i++) pillText(i+'m', px(i), wallPx + fs, '#00a895');
+  for (let i = 1; i < roomH; i++) pillText(i+'m', wallPx + fs + 6, px(i), '#00a895');
+  ctx.textBaseline = 'alphabetic';
 
   // Poles
   const zR = px(spacing); // spacing = radius
-  const pR = Math.max(5, Math.min(px(0.06), 16));
+  const bR = Math.max(7, Math.min(px(0.08), 20)); // black floor base
+  const pR = Math.max(4, bR * 0.55);              // chrome tube seen from above
 
   poles.forEach(function(pole, i) {
     const cx = px(pole.x), cy = px(pole.y);
@@ -1040,40 +1314,67 @@ function render() {
     // Zone fill
     ctx.beginPath();
     ctx.arc(cx, cy, zR, 0, Math.PI * 2);
-    ctx.fillStyle = isDrag ? 'rgba(0,201,177,0.18)' : isHov ? 'rgba(0,201,177,0.13)' : 'rgba(0,201,177,0.06)';
+    ctx.fillStyle = isDrag ? 'rgba(0,201,177,0.28)' : isHov ? 'rgba(0,201,177,0.2)' : 'rgba(0,201,177,0.13)';
     ctx.fill();
 
     // Zone dashed border
     ctx.beginPath();
     ctx.arc(cx, cy, zR, 0, Math.PI * 2);
     ctx.setLineDash(isDrag ? [] : [6, 5]);
-    ctx.strokeStyle = isDrag ? '#00C9B1' : isHov ? '#00a895' : 'rgba(0,201,177,0.4)';
-    ctx.lineWidth = isDrag ? 2 : 1.5;
+    ctx.strokeStyle = isDrag ? '#00C9B1' : isHov ? '#00a895' : 'rgba(0,168,149,0.85)';
+    ctx.lineWidth = isDrag ? 2.5 : 1.75;
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Pole dot gradient
-    const g = ctx.createRadialGradient(cx - pR*0.3, cy - pR*0.35, 0, cx, cy, pR);
-    g.addColorStop(0, isDrag ? '#7fffef' : '#b2f5ec');
-    g.addColorStop(0.5, isDrag ? '#00C9B1' : '#00a895');
-    g.addColorStop(1, '#007a6a');
+    // Black floor base, with a soft drop shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = bR * 0.8;
+    ctx.shadowOffsetX = bR * 0.25;
+    ctx.shadowOffsetY = bR * 0.3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, bR, 0, Math.PI * 2);
+    ctx.fillStyle = '#151515';
+    ctx.fill();
+    ctx.restore();
+    if (isDrag || isHov) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, bR + 2, 0, Math.PI * 2);
+      ctx.strokeStyle = '#00C9B1';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Chrome tube seen from above
+    const g = ctx.createRadialGradient(cx - pR*0.35, cy - pR*0.4, 0, cx, cy, pR);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.45, '#c9ced3');
+    g.addColorStop(1, '#6f767d');
     ctx.beginPath();
     ctx.arc(cx, cy, pR, 0, Math.PI * 2);
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Label
-    const lfs = Math.max(7, Math.min(10, zR * 0.24));
-    ctx.font = '700 ' + lfs + 'px Montserrat, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = isDrag || isHov ? '#007a6a' : '#00a895';
-    ctx.fillText(pole.label, cx, cy + zR * 0.60);
-    ctx.textBaseline = 'alphabetic';
   });
+
+  // Figures go over every zone, and labels over every figure
+  poles.forEach(function(pole) {
+    drawFigure(px(pole.x), px(pole.y), pR, figureAngle(pole));
+  });
+  if (!opts || !opts.forExport) {
+    poles.forEach(function(pole, i) {
+      drawHandle(pole, dragging && dragging.rotate && dragging.idx === i);
+    });
+  }
+
+  const lfs = Math.max(8, Math.min(11, zR * 0.24));
+  ctx.font = '700 ' + lfs + 'px Montserrat, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  poles.forEach(function(pole, i) {
+    const active = i === hoveredIdx || (dragging && dragging.idx === i);
+    pillText(pole.label, px(pole.x), px(pole.y) + zR * 0.60, active ? '#007a6a' : '#00a895');
+  });
+  ctx.textBaseline = 'alphabetic';
 
   updateStats();
   if (window.SpaceView3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
@@ -1141,19 +1442,31 @@ function overlaps(idx, nx, ny) {
   return false;
 }
 
+function rotateFigureTo(idx, p) {
+  const pole = poles[idx];
+  pole.figAngle = Math.atan2(p.y - px(pole.y), p.x - px(pole.x));
+  render();
+}
+
 canvas.addEventListener('mousedown', function(e) {
-  const p = getPos(e); const i = hitTest(p.x, p.y);
+  const p = getPos(e);
+  const h = hitHandle(p.x, p.y);
+  if (h >= 0) { dragging = { idx: h, rotate: true }; canvas.style.cursor = 'grabbing'; render(); return; }
+  const i = hitTest(p.x, p.y);
   if (i >= 0) { dragging = { idx: i }; canvas.style.cursor = 'grabbing'; }
 });
 canvas.addEventListener('mousemove', function(e) {
   const p = getPos(e);
-  if (dragging) {
+  if (dragging && dragging.rotate) {
+    rotateFigureTo(dragging.idx, p);
+  } else if (dragging) {
     const c = clamp(mt(p.x), mt(p.y));
     if (!overlaps(dragging.idx, c.x, c.y)) { poles[dragging.idx].x = c.x; poles[dragging.idx].y = c.y; }
     render();
   } else {
     const i = hitTest(p.x, p.y);
-    if (i !== hoveredIdx) { hoveredIdx = i; canvas.style.cursor = i >= 0 ? 'grab' : 'default'; render(); }
+    if (i !== hoveredIdx) { hoveredIdx = i; render(); }
+    canvas.style.cursor = hitHandle(p.x, p.y) >= 0 ? 'alias' : i >= 0 ? 'grab' : 'default';
   }
 });
 canvas.addEventListener('mouseup', function() { dragging = null; canvas.style.cursor = hoveredIdx >= 0 ? 'grab' : 'default'; render(); });
@@ -1220,8 +1533,12 @@ canvas.addEventListener('touchstart', function(e) {
     // Single-touch: drag pole if hit, else start panning when zoomed in
     e.preventDefault();
     const p = getPos(e);
+    const h = hitHandle(p.x, p.y);
     const i = hitTest(p.x, p.y);
-    if (i >= 0) {
+    if (h >= 0) {
+      dragging = { idx: h, rotate: true };
+      render();
+    } else if (i >= 0) {
       dragging = { idx: i };
     } else if (zoomScale > 1.01) {
       // Pan the zoomed canvas
@@ -1252,6 +1569,8 @@ canvas.addEventListener('touchmove', function(e) {
       zoomTx = panStartTx + (e.touches[0].clientX - panStartMid.x);
       zoomTy = panStartTy + (e.touches[0].clientY - panStartMid.y);
       applyTransform();
+    } else if (dragging.rotate) {
+      rotateFigureTo(dragging.idx, getPos(e));
     } else {
       // Drag pole
       const p = getPos(e);
@@ -1321,7 +1640,10 @@ async function openModal() {
   document.getElementById('previewImg').style.display = 'none';
   document.getElementById('modalActions').style.display = 'none';
   await new Promise(function(r) { setTimeout(r, 200); });
+  // Rotate handles are an editing aid — leave them out of the exported image
+  render({ forExport: true });
   capturedURL = canvas.toDataURL('image/png');
+  render();
   document.getElementById('previewImg').src = capturedURL;
   document.getElementById('previewImg').style.display = 'block';
   document.getElementById('genMsg').style.display = 'none';
@@ -1352,9 +1674,6 @@ function sendEmail() {
 }
 
 function downloadImg() { triggerDownload(); }
-
-document.getElementById('spacingVal').textContent =
-  parseFloat(document.getElementById('spacingSlider').value).toFixed(2) + ' m';
 
 // ── GATE ──────────────────────────────────────────────────────────────────
 async function gateSubmit() {
