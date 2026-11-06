@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 const TEAL = 0x00c9b1;
 const POLE_HEIGHT_M = 3.2; // ceiling height used for the pole cylinders — adjust here
@@ -9,7 +10,8 @@ const POLE_RADIUS_M = 0.035; // a bit thicker than a real 45mm pole so it reads 
 const WOOD_TILE_M = window.WOOD_TILE_M; // real-world size of one floor texture repeat, set in index.html
 
 let container, renderer, labelRenderer, scene, camera, controls, dirLight;
-let groundMesh, gridLines, roomGroup, poleGroup, woodTexture;
+let groundMesh, gridLines, roomGroup, poleGroup, mirrorGroup, woodTexture;
+let mirrorKey = null;
 let shared = {};
 let figures = [];
 let rafId = null;
@@ -73,6 +75,8 @@ function ensureScene() {
 
   woodTexture = makeWoodTexture();
 
+  mirrorGroup = new THREE.Group();
+  scene.add(mirrorGroup);
   roomGroup = new THREE.Group();
   scene.add(roomGroup);
   poleGroup = new THREE.Group();
@@ -245,10 +249,52 @@ function buildFigureTemplate() {
 
 // The angle lives on the pole object shared with the 2D plan (index.html).
 // 2D canvas y is 3D z, so a canvas rotation of a is a rotation of -a about y.
+// A flipped figure is mirrored front-to-back so she still faces the mirror
+// (index.html decides which ones need it).
 function placeFigure(figure, pole) {
-  const a = window.figureAngle(pole), half = window.ARM_SPAN_M / 2;
+  const pose = window.figurePose(pole), a = pose.angle, half = window.ARM_SPAN_M / 2;
   figure.position.set(pole.x + Math.cos(a) * half, 0, pole.y + Math.sin(a) * half);
   figure.rotation.y = -a;
+  figure.scale.z = pose.flip ? -1 : 1;
+}
+
+// Real reflective mirror on the chosen wall, from just above the skirting to
+// 2.4m, inset from the corners. Rebuilt only when the room or the wall changes.
+const MIRROR_BOTTOM = 0.15, MIRROR_TOP = 2.4;
+function syncMirror(roomW, roomH, wall) {
+  const key = roomW + 'x' + roomH + ':' + wall;
+  if (key === mirrorKey) return;
+  mirrorKey = key;
+  mirrorGroup.traverse(obj => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+    if (obj.getRenderTarget) obj.getRenderTarget().dispose();
+  });
+  mirrorGroup.clear();
+
+  const spec = {
+    top:    { len: roomW, x: roomW / 2, z: 0, rotY: 0 },
+    bottom: { len: roomW, x: roomW / 2, z: roomH, rotY: Math.PI },
+    left:   { len: roomH, x: 0, z: roomH / 2, rotY: Math.PI / 2 },
+    right:  { len: roomH, x: roomW, z: roomH / 2, rotY: -Math.PI / 2 },
+  }[wall];
+  const w = Math.max(spec.len - 0.4, 0.5), h = MIRROR_TOP - MIRROR_BOTTOM;
+  const dpr = renderer.getPixelRatio();
+
+  const frame = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.06, h + 0.06),
+    new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.4, metalness: 0.6 }));
+  const glass = new Reflector(new THREE.PlaneGeometry(w, h), {
+    clipBias: 0.003,
+    textureWidth: Math.round(Math.min(2048, w * 256 * dpr)),
+    textureHeight: Math.round(Math.min(1024, h * 256 * dpr)),
+    color: 0xc5ccd2,
+  });
+  [[frame, 0.01], [glass, 0.016]].forEach(function(m) {
+    m[0].rotation.y = spec.rotY;
+    m[0].position.set(spec.x, MIRROR_BOTTOM + h / 2, spec.z);
+    m[0].translateZ(m[1]); // local +z points into the room
+    mirrorGroup.add(m[0]);
+  });
 }
 
 // Grab a figure and drag to swing it around its pole. Listens in the capture
@@ -377,6 +423,7 @@ function animate() {
 
 function applyData(data) {
   syncGround(data.roomW, data.roomH);
+  syncMirror(data.roomW, data.roomH, data.mirrorWall || 'top');
   rebuildPoles(data.poles, data.spacing);
 }
 

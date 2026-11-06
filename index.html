@@ -122,6 +122,10 @@
   .btn-email { background: transparent; color: var(--muted); border: 1px solid var(--border2); }
   .btn-email:hover { border-color: var(--teal); color: var(--teal-dark); }
 
+  .mirror-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .mirror-btn { padding: 9px 6px; border: 1px solid var(--border2); border-radius: 6px; background: #fff; font: inherit; font-size: 0.7rem; font-weight: 600; color: var(--muted); cursor: pointer; transition: all 0.15s; }
+  .mirror-btn:hover { border-color: var(--teal); color: var(--teal-dark); }
+  .mirror-btn.active { background: var(--teal); border-color: var(--teal); color: #fff; }
   .tip { font-size: 0.67rem; color: var(--muted); line-height: 1.55; margin-top: 10px; padding: 8px 10px; background: var(--teal-pale); border-left: 3px solid var(--teal); border-radius: 0 5px 5px 0; }
 
   /* ── DRAWER TOGGLE & FAB (mobile) ────────────────────────────── */
@@ -651,6 +655,17 @@
     </div>
 
     <div class="sec">
+      <div class="sec-title">Parede do Espelho</div>
+      <div class="mirror-grid" id="mirrorGrid">
+        <button class="mirror-btn active" data-wall="top" onclick="setMirrorWall('top')">↑ Topo</button>
+        <button class="mirror-btn" data-wall="bottom" onclick="setMirrorWall('bottom')">↓ Base</button>
+        <button class="mirror-btn" data-wall="left" onclick="setMirrorWall('left')">← Esquerda</button>
+        <button class="mirror-btn" data-wall="right" onclick="setMirrorWall('right')">→ Direita</button>
+      </div>
+      <div class="tip">As alunas ficam de frente para o espelho. As paredes seguem a vista superior (2D); o topo é a parede do fundo no 3D.</div>
+    </div>
+
+    <div class="sec">
       <div class="sec-title">Área por Pole (raio)</div>
       <div class="slider-wrap">
         <div class="slider-row">
@@ -883,12 +898,57 @@ const FIG = { skin: '#eec19f', skinLine: '#c4916c', top: '#00C9B1', topLight: '#
 window.ARM_SPAN_M = ARM_SPAN_M;
 window.FIGURE_COLORS = FIG;
 
-function figureAngle(pole) { return pole.figAngle == null ? FIGURE_ANGLE : pole.figAngle; }
+// ── MIRROR ──────────────────────────────────────────────────────────────
+// Figures face the mirror wall. By default the arms run parallel to it, all
+// to the same side (so neighbours never collide), picking the side where the
+// free hand stays inside the room. A figure whose arm points the "wrong" way
+// for its facing is drawn mirrored, so she always looks at the mirror.
+let mirrorWall = 'top';
+const MIRROR_NORMALS = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+const MIRROR_NAMES = { top: 'topo', bottom: 'base', left: 'esquerda', right: 'direita' };
+let defaultFigAngle = FIGURE_ANGLE;
+
+function setMirrorWall(w) {
+  mirrorWall = w;
+  poles.forEach(function(p) { p.figAngle = undefined; }); // re-face everyone
+  document.querySelectorAll('.mirror-btn').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.wall === w);
+  });
+  if (layoutActive) render();
+}
+
+function computeDefaultFigAngle() {
+  const n = MIRROR_NORMALS[mirrorWall];
+  const candidates = n[0] === 0 ? [0, Math.PI] : [Math.PI / 2, -Math.PI / 2];
+  let best = candidates[0], bestOver = Infinity;
+  candidates.forEach(function(a) {
+    let over = 0;
+    poles.forEach(function(p) {
+      const ex = p.x + Math.cos(a) * ARM_SPAN_M, ey = p.y + Math.sin(a) * ARM_SPAN_M;
+      over += Math.max(0, -ex, ex - roomW, -ey, ey - roomH);
+    });
+    if (over < bestOver - 1e-6) { best = a; bestOver = over; }
+  });
+  return best;
+}
+
+function figureAngle(pole) { return pole.figAngle == null ? defaultFigAngle : pole.figAngle; }
+
+// Unflipped, a figure faces local -y, i.e. (sin a, -cos a) on the plan
+function figureFlipped(pole) {
+  const a = figureAngle(pole), n = MIRROR_NORMALS[mirrorWall];
+  return Math.sin(a) * n[0] - Math.cos(a) * n[1] < 0;
+}
+window.figurePose = function(pole) { return { angle: figureAngle(pole), flip: figureFlipped(pole) }; };
 
 // Rotate handle sits on the figure's free hand
 function handlePos(pole) {
-  const d = px(ARM_SPAN_M) - px(0.05), a = figureAngle(pole);
-  return { x: px(pole.x) + Math.cos(a) * d, y: px(pole.y) + Math.sin(a) * d };
+  const d = px(ARM_SPAN_M) - px(0.05), a = figureAngle(pole), r = handleRadius() + 2;
+  // Kept on the canvas even when the hand reaches past a wall, so it stays grabbable
+  return {
+    x: Math.max(r, Math.min(canvas.width - r, px(pole.x) + Math.cos(a) * d)),
+    y: Math.max(r, Math.min(canvas.height - r, px(pole.y) + Math.sin(a) * d)),
+  };
 }
 function handleRadius() { return Math.max(9, px(0.09)); }
 
@@ -929,7 +989,7 @@ function drawHandle(pole, active) {
   ctx.restore();
 }
 
-function drawFigure(cx, cy, poleR, angle) {
+function drawFigure(cx, cy, poleR, angle, flip) {
   const half = px(ARM_SPAN_M) / 2;
   const handL = px(0.1), handW = px(0.05);
   // Hand centres: the pole-side hand wraps the tube, the other is at full reach
@@ -939,6 +999,7 @@ function drawFigure(cx, cy, poleR, angle) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
+  if (flip) ctx.scale(1, -1);
   ctx.translate(half, 0); // body centre; local +x points away from the pole, -y is where she faces
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -1257,8 +1318,59 @@ function updateStats() {
   }
 }
 
+// Silver strip just inside the mirror wall, with a few diagonal glints
+function drawMirror(W, H, wallPx) {
+  const t = Math.max(8, px(0.08)), m = wallPx + Math.max(4, px(0.1));
+  const horiz = mirrorWall === 'top' || mirrorWall === 'bottom';
+  const r = {
+    top:    [m, wallPx, W - 2 * m, t],
+    bottom: [m, H - wallPx - t, W - 2 * m, t],
+    left:   [wallPx, m, t, H - 2 * m],
+    right:  [W - wallPx - t, m, t, H - 2 * m],
+  }[mirrorWall];
+  ctx.save();
+  const g = horiz ? ctx.createLinearGradient(0, r[1], 0, r[1] + r[3]) : ctx.createLinearGradient(r[0], 0, r[0] + r[2], 0);
+  g.addColorStop(0, '#eef4f8');
+  g.addColorStop(0.5, '#b9cad6');
+  g.addColorStop(1, '#dfe8ee');
+  ctx.fillStyle = g;
+  ctx.fillRect(r[0], r[1], r[2], r[3]);
+  ctx.beginPath();
+  ctx.rect(r[0], r[1], r[2], r[3]);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = Math.max(1, t * 0.25);
+  const len = horiz ? r[2] : r[3];
+  for (let s = len * 0.12; s < len; s += len * 0.22) {
+    ctx.beginPath();
+    if (horiz) { ctx.moveTo(r[0] + s, r[1] + r[3]); ctx.lineTo(r[0] + s + t * 1.5, r[1]); }
+    else { ctx.moveTo(r[0], r[1] + s + t * 1.5); ctx.lineTo(r[0] + r[2], r[1] + s); }
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#8fa3b1';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(r[0] + 0.5, r[1] + 0.5, r[2] - 1, r[3] - 1);
+
+  // "ESPELHO" tag just off the mirror, centred on the wall
+  const fs = Math.max(8, Math.min(10, SC * 0.09));
+  ctx.font = '700 ' + fs + 'px Montserrat, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // Top/left walls also carry the rulers, so the tag sits a bit further in there
+  const off = t + fs * 1.4, rulerGap = fs * 2.2;
+  // and is nudged half a metre along the wall to land between ruler marks
+  const pos = {
+    top: [W / 2 + px(0.5), r[1] + off + rulerGap], bottom: [W / 2 + px(0.5), r[1] + t - off],
+    left: [r[0] + off + fs * 1.6 + rulerGap * 1.4, H / 2 + px(0.5)], right: [r[0] + t - off - fs * 1.6, H / 2 + px(0.5)],
+  }[mirrorWall];
+  pillText('ESPELHO', pos[0], pos[1], '#5f7584');
+  ctx.textBaseline = 'alphabetic';
+}
+
 function render(opts) {
   const W = canvas.width, H = canvas.height;
+  defaultFigAngle = computeDefaultFigAngle();
   ctx.clearRect(0, 0, W, H);
 
   // Wood floor (same texture as the 3D view)
@@ -1291,6 +1403,8 @@ function render(opts) {
   ctx.strokeStyle = '#00C9B1';
   ctx.lineWidth = 2;
   ctx.strokeRect(wallPx, wallPx, W - wallPx * 2, H - wallPx * 2);
+
+  drawMirror(W, H, wallPx);
 
   // Rulers
   const fs = Math.max(9, Math.min(11, SC * 0.1));
@@ -1358,7 +1472,7 @@ function render(opts) {
 
   // Figures go over every zone, and labels over every figure
   poles.forEach(function(pole) {
-    drawFigure(px(pole.x), px(pole.y), pR, figureAngle(pole));
+    drawFigure(px(pole.x), px(pole.y), pR, figureAngle(pole), figureFlipped(pole));
   });
   if (!opts || !opts.forExport) {
     poles.forEach(function(pole, i) {
@@ -1372,12 +1486,14 @@ function render(opts) {
   ctx.textBaseline = 'middle';
   poles.forEach(function(pole, i) {
     const active = i === hoveredIdx || (dragging && dragging.idx === i);
-    pillText(pole.label, px(pole.x), px(pole.y) + zR * 0.60, active ? '#007a6a' : '#00a895');
+    // Label goes below the pole, or above it when the arm points down over it
+    const side = Math.sin(figureAngle(pole)) > 0.5 ? -1 : 1;
+    pillText(pole.label, px(pole.x), px(pole.y) + side * zR * 0.60, active ? '#007a6a' : '#00a895');
   });
   ctx.textBaseline = 'alphabetic';
 
   updateStats();
-  if (window.SpaceView3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
+  if (window.SpaceView3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing, mirrorWall });
   applyViewVisibility();
 }
 
@@ -1406,7 +1522,7 @@ function setViewMode(mode) {
     window.SpaceView3D.init(document.getElementById('canvas3dContainer'));
     view3DInitialized = true;
   }
-  if (is3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing });
+  if (is3D) window.SpaceView3D.update({ roomW, roomH, poles, spacing, mirrorWall });
   window.SpaceView3D.setActive(is3D);
 }
 
@@ -1629,7 +1745,8 @@ function buildMsg() {
   return 'Olá! Gostaria de um orçamento para meu estúdio de Pole Dance.\n\n' +
     '📐 Dimensões: ' + roomW + 'm × ' + roomH + 'm (' + (roomW * roomH).toFixed(1) + ' m²)\n' +
     '🎯 Quantidade de poles: ' + poles.length + '\n' +
-    '📏 Raio por pole: ' + spacing.toFixed(2) + ' m (⌀ ' + (spacing*2).toFixed(2) + ' m)\n\n' +
+    '📏 Raio por pole: ' + spacing.toFixed(2) + ' m (⌀ ' + (spacing*2).toFixed(2) + ' m)\n' +
+    '🪞 Espelho: parede ' + MIRROR_NAMES[mirrorWall] + ' (vista superior)\n\n' +
     'Segue a imagem do layout em anexo. Aguardo retorno!\n\nObrigado!';
 }
 
